@@ -366,8 +366,22 @@ void BaseQNAcceleration::performAcceleration(
       _nbDropCols = 0;
     }
 
+    if (tSteps == 0 && its == 3){
+        Eigen::VectorXd sDisp = _matrixS.col(2);
+        Eigen::VectorXd vDisp = _matrixV.col(2);
+        removeMatrixColumn(2);
+        _qrV.deleteColumn(2);
+        PRECICE_INFO(" Method A: Removing the very first column: " << utils::MasterSlave::l2norm(sDisp) << " - with residual: " << utils::MasterSlave::l2norm(vDisp));
+    }
+    if (its > 2 || tSteps > 0){
+        PRECICE_INFO(" Apply filter");
+        utils::Event  aF("applyFilter");
+        applyFilter();
+        aF.stop();
+    }
+
     // apply the configured filter to the LS system
-    applyFilter();
+    //applyFilter();
 
     // revert scaling of V, in computeQNUpdate all data objects are unscaled.
     _preconditioner->revert(_matrixV);
@@ -454,7 +468,7 @@ void BaseQNAcceleration::applyFilter()
 
       removeMatrixColumn(delIndices[i]);
 
-      PRECICE_DEBUG(" Filter: removing column with index " << delIndices[i] << " in iteration " << its << " of time step: " << tSteps);
+      PRECICE_INFO(" Filter: removing column with index " << delIndices[i] << " in iteration " << its << " of time step: " << tSteps);
     }
     PRECICE_ASSERT(_matrixV.cols() == _qrV.cols(), _matrixV.cols(), _qrV.cols());
   }
