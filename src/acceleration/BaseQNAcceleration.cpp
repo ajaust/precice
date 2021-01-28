@@ -77,14 +77,11 @@ void BaseQNAcceleration::initialize(
   sss<<"debugOutput-rank-"<<utils::MasterSlave::getRank();
   _debugOut.open(sss.str(), std::ios_base::out);
   _debugOut << std::setprecision(16);
-
   Eigen::IOFormat CommaInitFmt(Eigen::StreamPrecision, Eigen::DontAlignCols, ", ", ", ", "", "", " << ", ";");
-
   _debugOut<<"initialization:\n";
   for (int id : _dataIDs) {
       const auto& values = *cplData[id]->values;
       const auto& oldValues = cplData[id]->oldValues.col(0);
-
       _debugOut<<"id: "<<id<<" dim: "<<cplData[id]->dimension<<"     values: "<<values.format(CommaInitFmt)<<'\n';
       _debugOut<<"id: "<<id<<" dim: "<<cplData[id]->dimension<<" old values: "<<oldValues.format(CommaInitFmt)<<'\n';
     }
@@ -220,12 +217,9 @@ void BaseQNAcceleration::updateDifferenceMatrices(
 
       Eigen::VectorXd deltaR = _residuals;
       deltaR -= _oldResiduals;
-      PRECICE_INFO("deltaR values: " << utils::MasterSlave::l2norm(deltaR));
 
       Eigen::VectorXd deltaXTilde = _values;
-      PRECICE_INFO("Magnitude values: " << utils::MasterSlave::l2norm(_values));
       deltaXTilde -= _oldXTilde;
-      PRECICE_INFO("deltaXTilde values: " << utils::MasterSlave::l2norm(deltaXTilde));
 
       PRECICE_CHECK(not math::equals(utils::MasterSlave::l2norm(deltaR), 0.0), "Attempting to add a zero vector to the quasi-Newton V matrix. This means that the residual "
                                                                                "in two consecutive iterations is identical. There is probably something wrong in your adapter. "
@@ -270,43 +264,6 @@ void BaseQNAcceleration::updateDifferenceMatrices(
   }
 }
 
-/**
- *        Check if convergence is stagnating
- * 
- */
-void BaseQNAcceleration::stagnatingCheck()
-{
-  int kC = _matrixCols[0];
-
-  if (kC > 20 && kC <= 40){
-    double averageFirst = 0.0;
-    double averageLast = 0.0;
-    for (int i = 0; i < 3; i++){
-      Eigen::VectorXd vFirst = _matrixV.col(i);
-      averageFirst += utils::MasterSlave::l2norm(vFirst);
-      Eigen::VectorXd vLast = _matrixV.col(i + 8);
-      averageLast += utils::MasterSlave::l2norm(vLast);
-    }
-    PRECICE_INFO("Convergence Rate for stagnating Check -> 20+: " << averageLast/averageFirst);
-  }
-  if (kC > 40){
-    double averageFirst = 0.0;
-    double averageLast = 0.0;
-    double averageMiddle = 0.0;
-    for (int i = 0; i < 3; i++){
-      Eigen::VectorXd vFirst = _matrixV.col(i);
-      averageFirst += utils::MasterSlave::l2norm(vFirst);
-      Eigen::VectorXd vLast = _matrixV.col(i + 16);
-      averageLast += utils::MasterSlave::l2norm(vLast);
-      Eigen::VectorXd vMiddle = _matrixV.col(i + 8);
-      averageMiddle += utils::MasterSlave::l2norm(vMiddle);
-    }
-    PRECICE_INFO("Convergence Rate for stagnating Check -> 40+: " << averageLast/averageFirst);
-    PRECICE_INFO("Convergence Rate for stagnating Check -> 20+: " << averageMiddle/averageFirst);
-  }
-
-}
-
 /** ---------------------------------------------------------------------------------------------
  *         performAcceleration()
  *
@@ -331,7 +288,6 @@ void BaseQNAcceleration::performAcceleration(
   for (int id : _dataIDs) {
       const auto& values = *cplData[id]->values;
       const auto& oldValues = cplData[id]->oldValues.col(0);
-
       _debugOut<<"id: "<<id<<"     values: "<<values.format(CommaInitFmt)<<'\n';
       _debugOut<<"id: "<<id<<" old values: "<<oldValues.format(CommaInitFmt)<<'\n';
     }
@@ -349,7 +305,6 @@ void BaseQNAcceleration::performAcceleration(
    * appending the difference matrices
    */
   updateDifferenceMatrices(cplData);
-  stagnatingCheck();
 
   if (_firstIteration && (_firstTimeStep || _forceInitialRelaxation)) {
     PRECICE_DEBUG("   Performing underrelaxation");
@@ -407,27 +362,22 @@ void BaseQNAcceleration::performAcceleration(
       _nbDropCols = 0;
     }
 
-    if(tSteps == 0){
-      if(its == 3){
+    if (tSteps == 0 && its == 3){
+        Eigen::VectorXd sDisp = _matrixS.col(2);
+        Eigen::VectorXd vDisp = _matrixV.col(2);
         removeMatrixColumn(2);
         _qrV.deleteColumn(2);
-      }
-    }else if(tSteps > 1){
-      if(its == 2){
-        removeMatrixColumn(_matrixCols[1]);
-        _qrV.deleteColumn(_matrixCols[1]);
-        removeMatrixColumn(_matrixCols[1] - 1);
-        _qrV.deleteColumn(_matrixCols[1] - 1);
-      }
+        PRECICE_INFO(" Method A: Removing the very first column: " << utils::MasterSlave::l2norm(sDisp) << " - with residual: " << utils::MasterSlave::l2norm(vDisp));
     }
-    if(tSteps == 5 && its == 0)
-      _timestepsReused = 10;
-    else if (tSteps < 5)
-      _timestepsReused = 3;
-
+    if (its > 2 || tSteps > 0){
+        PRECICE_INFO(" Apply filter");
+        utils::Event  aF("applyFilter");
+        applyFilter();
+        aF.stop();
+    }
 
     // apply the configured filter to the LS system
-    applyFilter();
+    //applyFilter();
 
     // revert scaling of V, in computeQNUpdate all data objects are unscaled.
     _preconditioner->revert(_matrixV);
@@ -486,7 +436,6 @@ void BaseQNAcceleration::performAcceleration(
   for (int id : _dataIDs) {
       const auto& values = *cplData[id]->values;
       const auto& oldValues = cplData[id]->oldValues.col(0);
-
       _debugOut<<"id: "<<id<<"norm: "<<values.norm()<<"     values: "<<values.format(CommaInitFmt)<<'\n';
       _debugOut<<"id: "<<id<<"norm: "<<oldValues.norm()<<" old values: "<<oldValues.format(CommaInitFmt)<<'\n';
     }
