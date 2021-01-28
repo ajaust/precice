@@ -25,6 +25,14 @@ public:
 
   virtual void initialize(std::vector<size_t> &svs);
 
+  bool firstIter = true;
+
+  double maxWeight = 0;
+  double minWeight = 1000000000;
+
+  int tStepPrecon = 1;
+  Eigen::VectorXd normWeights;
+
 private:
   /**
    * @brief Update the scaling after every FSI iteration.
